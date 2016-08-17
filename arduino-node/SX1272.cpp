@@ -152,7 +152,7 @@ void SX1272::RxChainCalibration()
 uint8_t SX1272::ON()
 {
     uint8_t state = 2;
-Serial.print("SX1272_SS = ");
+    Serial.print("SX1272_SS = ");
 	Serial.println(SX1272_SS);
 	
 	

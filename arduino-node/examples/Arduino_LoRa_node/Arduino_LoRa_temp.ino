@@ -651,7 +651,7 @@ void loop(void)
       //delay(120000);
       //delay(600000+random(15,60)*1000);  
       lastTransmissionTime=millis();
-      delayBeforeTransmit=600000+random(15,60)*1000;
+      delayBeforeTransmit=1000+random(15,60)*100;
   }
 #endif
 

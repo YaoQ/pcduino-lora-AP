@@ -1,193 +1,5 @@
-/* 
- *  LoRa gateway to receive and send command
- *
- *  Copyright (C) 2015-2016 Congduc Pham
- *
- *  This program is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
-
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *suao 
- *  You should have received a copy of the GNU General Public License
- *  along with the program.  If not, see <http://www.gnu.org/licenses/>.
- *
- ***************************************************************************** 
- *  Version:                1.3
- *  Design:                 C. Pham
- *  Implementation:         C. Pham
- *
- *  waits for command or data on serial port or from the LoRa module
- *    - command starts with /@ and ends with #
- *  
- *  LoRa parameters
- *    - /@M1#: set LoRa mode 1
- *    - /@C12#: use channel 12 (868MHz)
- *    - /@SF8#: set SF to 8
- *    - /@PL/H/M/x/X#: set power to Low, High or Max; extreme (PA_BOOST at +14dBm), eXtreme (PA_BOOST at +20dBm)
- *    - /@A9#: set node addr to 9
- *    - /@W34#: set sync word to 0x34
- *    - /@ON# or /@OFF#: power on/off the LoRa module
- *
- *  Use of ACK
- *    - /@ACK#hello w/ack : sends the message and request an ACK
- *    - /@ACKON# enables ACK (for all messages)
- *    - /@ACKOFF# disables ACK
- * 
- *  CAD, DIFS/SIFS mechanism, RSSI checking, extended IFS
- *    - /@CAD# performs an SIFS CAD, i.e. 3 or 6 CAD depending on the LoRa mode
- *    - /@CADON3# uses 3 CAD when sending data (normally SIFS is 3 or 6 CAD, DIFS=3SIFS)
- *    - /@CADOFF# disables CAD (IFS) when sending data
- *    - /@RSSI# toggles checking of RSSI before transmission and after CAD
- *    - /@EIFS# toggles for extended IFS wait
- 
- *  if compiled with IS_RCV_GATEWAY
- *    - just connect the Arduino board with LoRa module
- *    - use any serial tool to view data that is received
- *    - with a python script to read serial port, all received data could be forwarded to another application through
- *      standart output
- *    - remote configuration needs to be allowed by unlocking the gateway with command '/@U' with an unlock pin
- *      - '/@U1234#'
- *    - allowed commands for a gateway are
- *      - M, C, P, A, ON, OFF
- *      - ACKON, ACKOFF (if using unmodified SX1272 lib)
- *
- *  if compiled with IS_SEND_GATEWAY  
- *    - can read from serial port to send input data (ASCII format)
- *    - remote configuration needs to be allowed by unlocking the gateway with command '/@U' with an unlock pin
- *      - '/@U1234#'
- *    - accepts all the command set of a receive gateway
- *    - periodic sending of packet for range test
- *      - /@T5000#: send a message at regular time interval of 5000ms. Use /@T0# to disable periodic sending
- *      - /@TR5000#: send a message at random time interval between [2000, 5000]ms.
- *      - /@Z200# sets the packet payload size to 200
- *    - the command /@D specifies the destination node for sending remote commands
- *      - /@D56#: set the destination node to be 56, this is permanent, until the next D command
- *      - /@D58#hello: send hello to node 56, destination addr is only for this message
- *      - /@D4#/@C1#Q30#: send the command string /@C1#Q30# to node 4
- *    - the S command sends a string of arbitrary size
- *      - /@S50# sends a 50B user payload packet filled with '#'. The real size is 55B with the Libelium header 
- *
- *  if compiled with LORA_LAS
- *    - add LAS support
- *      - sending message will use LAS service
- *      - /@LASS# prints LAS statistics
- *      - /@LASR# resets LAS service
- *      - /@LASON# enables LAS service
- *      - /@LASOFF# disables LAS service
- *    - if IS_SEND_GATEWAY
- *      - /@REG# sends a REG message 
- *    - if IS_RCV_GATEWAY
- *      - /@LASI# initiate the INITrestart/INIT procedure that ask end-devices to send the REG msg
- *      
- *   IMPORTANT NOTICE   
- *    - the gateway use data prefix to indicate data received from radio. The prefix is 2 bytes: 0xFF0xFE 
- *    - the post-processing stage looks for this sequence to dissect the data, according to the format adopted by the sender 
- *    - if you use our LoRa_Temp example, then the packet format as expected by the post-processing script is as follows:
- *      - without application key and without encryption, payload starts immediately: [payload]
- *      - without application key and with encryption: original (clear) format is [size(1B)][payload]. size is the real size of the clear payload
- *      - if application key is used, without encryption: [AppKey(4B)][payload]
- *      - if application key is used, with encryption: original (clear) format is [AppKey(4B)][size(1B)][payload]. size is the real size of the clear payload
- *    - for more details on the underlying packet format used by our modified SX1272 library
- *      - refer to the SX1272.h
- *      - see http://cpham.perso.univ-pau.fr/LORA/RPIgateway.html
- *      
-*/
-
-/*  Change logs
- *
- *  Mar, 25th, 2016. v1.3
- *        Add command to set the spreading factor between 6 and 12:
- *          - /@SF8#: set SF to 8
- *  Fev, 25th, 2016. v1.2
- *        Add 900MHz support when specifying a channel in command line
- *        Use by default channel 10 (865.2MHz) in 868MHz band and channel 5 (913.88) in 900MHz band
- *  Jan, 22th, 2016. v1.1
- *        Add advanced configuration options when running on Linux (Raspberry typically)
- *          - options are: --mode 4 --bw 500 --cr 5 --sf 12 --freq 868.1 --ch 10 --sw 34 --raw 
- *        Add raw output option in the Linux version. The gateway will forward all the payload without any interpretation  
- *          - this feature is implemented in the SX1272 library, see the corresponding CHANGES.log file
- *          - this is useful when the packet interpretation is left to the post-processing stage (e.g. for LoRaWAN)
- *  Dec, 30th, 2015. v1.0
- *        SX1272 library has been modified to allow for sync word setting, a new mode 11 is introduced to test with LoRaWAN
- *        BW=125kHz, CR=4/5 and SF=7. When using mode 11, sync word is set to 0x34. Normally, use the newly defined CH_18_868=868.1MHz
- *        Add possibility to set the sync word
- *          - /@W34# set the sync word to 0x34
- *  Nov, 13th, 2015. v0.9
- *        SX1272 library has been modified to support dynamic ACK request using the retry field of the packet header
- *        Gateway now always use receivePacketTimeout() and sender either use sendPacketTimeout() or sendPacketTimeoutACK()
- *  Nov, 10th, 2015. v0.8a
- *        Add an unlock pin to allow the gateway to accept remote commands
- *        A limited number of attempts is allowed
- *          - /@U1234#: try to unlock with pin 1234. To lock, issue the same command again.
- *  Oct, 8th, 2015. v0.8
- *        Can change packet size for periodic packet transmission
- *          - /@Z200# sets the packet payload size to 200. The real size is 205B with the Libelium header.
- *            Maximum size that can be indicated is then 250.
- *        Add possibility to send periodically at random time interval
- *          - /@TR5000#: send a message at random time interval between [2000, 5000]ms.
- *        Check RSSI value before transmitting a packet. This is done after successful CAD
- *          - CAD must be ON
- *          - /@RSSI# toggles checking of RSSI, must be above -90dBm to transmit, otherwise, repeat 10 times
- *  Sep, 22nd, 2015. v0.7
- *        Add ACK support when sending packets
- *          - /@ACKON# enables ACK
- *          - /@ACKOFF# disables ACK
- *        Can use extended IFS wait to: 
- *          - CAD must be ON
- *          - wait a random number of CAD after a successful IFS
- *          - perform an IFS one more time before packet tranmission 
- *          - /@EIFS# toggles for extended IFS wait
- *  Jul, 1st, 2015. v0.6
- *        Add support of the LoRa Activity Sharing (LAS) mechanism (device side), uncomment #define LORA_LAS
- *          - sending message will use LAS service
- *          - /@LASS# prints LAS statistics
- *          - /@LASR# resets LAS service
- *          - /@LASON# enables LAS service
- *          - /@LASOFF# disables LAS service
- *          - /@REG# sends a REG message if IS_SEND_GATEWAY
- *          - /@INIT# sends an INIT(0,delay) message for restarting if IS_SEND_GATEWAY
- *  June, 29th, 2015. v0.5
- *        Add a CAD_TEST behavior to see continuously channel activity, uncomment #define CAD_TEST
- *        Add LoRa ToA computation when sending data
- *        Add CAD test when sending data
- *          - /@CADON3# uses 3 CAD when sending data (normally SIFS is 3 or 6 CAD, DIFS=3SIFS)
- *          - /@CADOFF# disables CAD when sending data
- *        Add CAD feature for testing
- *          - /@CAD# performs an SIFS CAD, i.e. 3 or 6 CAD depending on the LoRa mode
- *        Add ON and OFF command to power on/off the LoRa module
- *          - /@ON# or /@OFF#
- *        Add the S command to send a string of arbitrary size
- *          - /@S50# sends a 50B user payload packet filled with '#'. The real size is 55B with the Libelium header 
- *        The gateway can accept command from serial or from the LoRa module
- *  May, 11th, 2015. v0.4
- *        Add periodic sending of packet for range test
- *          - /@T5000#: send a message every 5s. Use /@T0# to disable periodic sending
- *  Apr, 17th, 2015. v0.3
- *        Add possibility to configure the LoRa operation mode
- *          - /@M1#: set LoRa mode 1
- *          - /@C12#: use channel 12 (868MHz)
- *          - /@PL/H/M#: set power to Low, High or Max
- *          - /@A9#: set node addr to 9    
- *  Apr, 16th, 2015. v0.2
- *        Integration of receive gateway and send gateway: 
- *          - #define IS_SEND_GATEWAY will produce a sending gateway to send remote commands
- *  Apr, 14th, 2015. v0.1
- *        First version of receive gateway
- */
-
-// Include the SX1272 
 #include "SX1272.h"
 
-//#define DEBUG
-
-// IMPORTANT
-///////////////////////////////////////////////////////////////////////////////////////////////////////////
-// please uncomment only 1 choice
 #define BAND868
 //#define BAND900
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -202,7 +14,6 @@
 #include <time.h>
 #include <math.h>
 
-//hufan
 #include "spi_bash.h"
 
 
@@ -224,18 +35,6 @@
   #define DEBUG_VALUE(fmt,param)  
 #endif
   
-//#define RECEIVE_ALL 
-//#define IS_RCV_GATEWAY
-//#define IS_SEND_GATEWAY
-//#define CAD_TEST
-//#define LORA_LAS
-//#define WINPUT
-//#define WITH_SEND_LED
-
-// the special mode to test BW=125MHz, CR=4/5, SF=12
-// on the 868.1MHz channel
-//#define LORAMODE 11
-
 #define LORAMODE 4
 
 #ifdef BAND868
@@ -678,10 +477,8 @@ void loop(void)
 { 
   int i=0, e;
   int cmdValue;
-///////////////////////  
-// ONLY FOR TESTING CAD
-#ifdef CAD_TEST
 
+#ifdef CAD_TEST
   startDoCad=millis();
   e = sx1272.doCAD(SIFS_cad_number);
   endDoCad=millis();
@@ -716,11 +513,6 @@ void loop(void)
     
   delay(200);
 #endif
-// ONLY FOR TESTING CAD
-///END/////////////////
-
-//////////////////////////  
-// START OF PERIODIC TASKS
 
   receivedFromSerial=false;
   receivedFromLoRa=false;
@@ -729,46 +521,10 @@ void loop(void)
   // call periodically to be able to detect the start of a new cycle
   loraLAS.checkCycle();
 #endif
-
-// handle keyboard input from a UNIX terminal  
-  while (unistd::read(0, &ch, 1)) {
-    
-	if (ch == '\n') {
-
-		strcpy(cmd,keyPressBuff);
-                PRINT_CSTSTR("%s","Cmd from keyboard: ");
-                PRINT_STR("%s",cmd);
-                PRINTLN;
-		
-		keyIndex=0;	
-                receivedFromSerial=true;
-	}
-	else {
-        	// backspace
-        	if (ch == 127 || ch==8) {
-        		keyIndex--;
-        	}
-        	else {
-        	
-        		keyPressBuff[keyIndex]=(char)ch;
-        		keyIndex++;
-        	}
-        }
-	
-	keyPressBuff[keyIndex]='\0';
-
-        PRINT_CSTSTR("%s","keyboard input : ");
-        PRINT_STR("%s",keyPressBuff);
-        PRINTLN;    
-  }
-
   if (radioON && !receivedFromSerial) {
 
       // open a receive window
       uint16_t w_timer=1000;
-      
-///////////////////////////////////////////////////////
-// ONLY FOR BASE STATION RECEIVING MESSAGES FROM DEVICE
       
       if (loraMode==1)
         w_timer=2500;
@@ -795,9 +551,6 @@ void loop(void)
         e = sx1272.receivePacketTimeout(w_timer);
 #endif
 #endif 
-// ONLY FOR BASE STATION RECEIVING MESSAGES FROM DEVICE
-///END/////////////////////////////////////////////////
-
       if (!e) {
          int a=0, b=0;
          uint8_t tmp_length;
@@ -822,8 +575,6 @@ void loop(void)
                    
          PRINT_STR("%s",sprintf_buf);
 
-         // provide a short output for external program to have information about the received packet
-         // ^psrc_id,seq,len,SNR,RSSI
          sprintf(sprintf_buf,"^p%d,%d,%d,%d,%d,%d,%d\n",
                    sx1272.packet_received.dst,
                    sx1272.packet_received.type,                   
@@ -835,7 +586,6 @@ void loop(void)
                    
          PRINT_STR("%s",sprintf_buf);          
 
-         // ^rbw,cr,sf
          sprintf(sprintf_buf,"^r%d,%d,%d\n", 
                    (sx1272._bandwidth==BW_125)?125:((sx1272._bandwidth==BW_250)?250:500),
                    sx1272._codingRate+4,
@@ -843,8 +593,6 @@ void loop(void)
                    
          PRINT_STR("%s",sprintf_buf);  
 
-// for Linux-based gateway only
-///////////////////////////////
          char buffer[30];
          int millisec;
          struct tm* tm_info;
@@ -946,9 +694,6 @@ void loop(void)
       switch (cmd[i]) {
 
 #ifdef IS_SEND_GATEWAY       
-///////////////////////////////////////////////////////
-// ONLY FOR END-DEVICE SENDING MESSAGES TO BASE STATION
-
             case 'D': 
               i++;
               cmdValue=getCmdValue(i);
@@ -1006,9 +751,6 @@ void loop(void)
               if (random_inter_pkt_time)
                 random_inter_pkt_time = rand() % inter_pkt_time + 2000;
             break;        
-            
-            // set the pkt size default is 40
-            // "Z250#"
             case 'Z':    
               i++;
               cmdValue=getCmdValue(i);
@@ -1058,8 +800,6 @@ void loop(void)
             break;  
 
 #endif
-// ONLY FOR END-DEVICE SENDING MESSAGES TO BASE STATION
-///END/////////////////////////////////////////////////
 
 #ifdef IS_RCV_GATEWAY
             case 'U':
