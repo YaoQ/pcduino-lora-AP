@@ -10,7 +10,7 @@ The following content, I will introduce the details of how to DIY a low-cost Lor
 ## Required
 **pcDuino lora gateway**
 - pcDuino8 Uno x 1
-- [Linker LoRa module](http://www.linksprite.com/wiki/index.php5?title=Low-cost_LoRa_Module) x 1
+- [LoRa module](http://www.linksprite.com/wiki/index.php5?title=Low-cost_LoRa_Module) x 1
 - Linker cable x 1
 - Dupont Line x 2
 
@@ -23,6 +23,16 @@ The following content, I will introduce the details of how to DIY a low-cost Lor
 ## Steps
 
 ### 1. Assemble the hardware
+* According to the following pins map table to connect the lora module and pcDuino or Arduino
+
+| Lora module pins | Arduino Pins | pcDuino Pins|
+|:--------:|:--------:|:--------:|
+|SCK|13|13|
+|MISO|12|12|
+|MOSI|11|11|
+|NSS|10|10|
+|VCC|3.3V|3.3V|
+|GND|GND|GND|
 #### Arduino Lora node
 
 ![](images/poorman_arduino.png)
